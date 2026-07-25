@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Outlook Integration",
-  "version": "0.2.9",
-  "description": "Applies the configured title-bar color and routes external links to the Linux default browser.",
+  "version": "0.3.0",
+  "description": "Integrates Outlook with Linux, checks for updates, and routes external links to the default browser.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAt9lPYaEv/NLmfnZOFr0ZIljQ2xnUOPh3f5ImVpoBm83ChiWMLo9WPAE24OWkKLS2FySlk2xfMLvVO7b/o8m0hFZ/SCdr5DTybePiEDZOVqgYPlZQ/AhYc8BLzWrh92zLzEd8zirkzLKGSYwuSXb5gAPn69MYLnbdtt0eoQ8P3TvBjljkxV3uRR9Hq8S+wO9ZDjJYGXmEnMksbupUZYrPZ3km50Uae47fpE/0/1waM4luRGtGN//LzyxUGee9c0rupEOVprFki89d/JdPifCiSw5ovyOUYfxiNar39NxfzxxJSQJehexrs5wkbJovzw0VQTR6r+q9zDw7wr1aK68bLwIDAQAB",
   "permissions": [
     "nativeMessaging"
@@ -12,7 +12,7 @@
     "https://outlook.live.com/*"
   ],
   "background": {
-    "service_worker": "background-v029.js"
+    "service_worker": "background-v030.js"
   },
   "content_scripts": [
     {
@@ -30,7 +30,8 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "config.json"
+        "config.json",
+        "a5-settings.svg"
       ],
       "matches": [
         "https://outlook.office.com/*",

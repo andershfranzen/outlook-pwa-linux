@@ -2,7 +2,7 @@
 set -eu
 umask 022
 
-RELEASE_VERSION="0.2.9"
+RELEASE_VERSION="0.3.0"
 DEFAULT_REPOSITORY="andershfranzen/outlook-pwa-linux"
 PACKAGE_NAME="outlook-pwa-linux"
 PACKAGE_ARCHITECTURE="amd64"

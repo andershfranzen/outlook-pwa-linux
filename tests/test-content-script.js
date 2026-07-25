@@ -177,7 +177,18 @@ const runtimeMessages = [];
 global.chrome = {
   runtime: {
     getURL: (resource) => `extension://${resource}`,
-    sendMessage: (message) => runtimeMessages.push(message),
+    lastError: null,
+    sendMessage(message, callback) {
+      runtimeMessages.push(message);
+      if (message.type === "check-update") {
+        callback?.({
+          ok: true,
+          currentVersion: "0.3.0",
+          latestVersion: "0.3.1",
+          updateAvailable: true,
+        });
+      }
+    },
   },
 };
 global.fetch = async () => ({
@@ -217,17 +228,32 @@ async function main() {
   });
   assert.equal(
     wrapperSettings.getAttribute("aria-label"),
-    "Outlook for Linux settings",
+    "Outlook for Linux settings — update 0.3.1 available",
   );
+  const updateBadge = document.getElementById("outlook-pwa-linux-update-badge");
+  assert.ok(updateBadge);
+  assert.equal(updateBadge.style.display, "block");
+  const brandIcon = wrapperSettings.children.find(
+    (element) => element.tagName === "IMG",
+  );
+  assert.ok(brandIcon);
+  assert.equal(brandIcon.src, "extension://a5-settings.svg");
+  assert.deepEqual(runtimeMessages, [{ type: "check-update" }]);
 
   const wrapperEvent = wrapperSettings.click();
   assert.equal(wrapperEvent.defaultPrevented, true);
-  assert.deepEqual(runtimeMessages, [{ type: "open-settings" }]);
+  assert.deepEqual(runtimeMessages, [
+    { type: "check-update" },
+    { type: "open-settings" },
+  ]);
   assert.equal(officialClicks, 0);
 
   officialSettings.click();
   assert.equal(officialClicks, 1);
-  assert.deepEqual(runtimeMessages, [{ type: "open-settings" }]);
+  assert.deepEqual(runtimeMessages, [
+    { type: "check-update" },
+    { type: "open-settings" },
+  ]);
 
   toolbar.insertBefore(officialSettings, wrapperSettings);
   observerCallback();

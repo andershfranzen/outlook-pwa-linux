@@ -12,7 +12,7 @@ import subprocess
 import tempfile
 from typing import Any
 
-VERSION = "0.2.9"
+VERSION = "0.3.0"
 APP_ID = "faolnafnngnfdaknnbpnkhgohbobgegn"
 EXTENSION_ID = "mfjjkdjhfcbabopnjmjapphchleaglcp"
 EXTENSION_HOST = "com.outlook_pwa_linux.link_router"
@@ -76,10 +76,13 @@ def resource_root() -> Path:
     overridden = os.environ.get("OUTLOOK_PWA_RESOURCE_ROOT")
     if overridden:
         return Path(overridden)
+    source = Path(__file__).resolve().parents[1]
+    if (source / "extension").is_dir() and (source / "assets").is_dir():
+        return source
     installed = Path("/usr/share/outlook-pwa-linux")
     if installed.is_dir():
         return installed
-    return Path(__file__).resolve().parents[1]
+    return source
 
 
 def default_settings() -> dict[str, Any]:
@@ -545,7 +548,9 @@ def remove_profile_integration(profile: dict[str, Any]) -> None:
 
 
 def extension_enabled(settings: dict[str, Any]) -> bool:
-    return bool(settings["route_external_links"]) or settings["titlebar_style"] != "system"
+    # The extension also supplies the integrated Settings control and automatic
+    # update indicator, so it remains enabled when optional theming/routing is off.
+    return True
 
 
 def effective_titlebar_color(settings: dict[str, Any]) -> str:
@@ -565,23 +570,28 @@ def sync_extension(settings: dict[str, Any]) -> Path | None:
     source = resource_root() / "extension"
     destination = app_config_dir() / "extension"
     destination.mkdir(mode=0o700, parents=True, exist_ok=True)
-    for filename in ("manifest.json", "content.js", "background-v029.js"):
+    current_background = "background-v030.js"
+    for filename in (
+        "manifest.json",
+        "content.js",
+        current_background,
+    ):
         source_file = source / filename
         if source_file.is_file():
             shutil.copyfile(source_file, destination / filename)
             (destination / filename).chmod(0o600)
-    try:
-        (destination / "background.js").unlink()
-    except FileNotFoundError:
-        pass
-    try:
-        (destination / "background-v025.js").unlink()
-    except FileNotFoundError:
-        pass
-    try:
-        (destination / "background-v026.js").unlink()
-    except FileNotFoundError:
-        pass
+    brand_source = resource_root() / "branding" / "a5-settings.svg"
+    if not brand_source.is_file():
+        brand_source = resource_root() / "assets" / "branding" / "a5-settings.svg"
+    if brand_source.is_file():
+        shutil.copyfile(brand_source, destination / "a5-settings.svg")
+        (destination / "a5-settings.svg").chmod(0o600)
+    for obsolete_background in destination.glob("background*.js"):
+        if obsolete_background.name != current_background:
+            try:
+                obsolete_background.unlink()
+            except OSError:
+                pass
     configuration = {
         "themeColor": effective_titlebar_color(settings),
         "routeExternalLinks": bool(settings["route_external_links"]),

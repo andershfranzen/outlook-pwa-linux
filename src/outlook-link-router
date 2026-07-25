@@ -12,6 +12,8 @@ import subprocess
 import sys
 from urllib.parse import urlparse
 
+from outlook_pwa_updater import check_status
+
 MAX_MESSAGE_SIZE = 1024 * 1024
 MAX_URL_SIZE = 32768
 
@@ -80,9 +82,13 @@ def main() -> int:
         message = read_message()
         if message.get("command") == "open-settings":
             open_settings()
+            response = {"ok": True}
+        elif message.get("command") == "check-update":
+            response = check_status(force=message.get("force") is True)
         else:
             open_url(message.get("url"))
-        write_message({"ok": True})
+            response = {"ok": True}
+        write_message(response)
     except Exception as error:
         write_message({"ok": False, "error": str(error)})
     return 0

@@ -21,12 +21,14 @@ Firefox—or your chosen browser—as the system default.
   pages stay inside one app window;
 - isolated work and personal Outlook profiles with separate dock identities;
 - native GTK 4/Libadwaita settings integrated into Outlook's own toolbar;
+- a dedicated a5 mark for the integrated Linux settings control;
 - Outlook blue, dark, system, or custom title-bar colors;
 - external web links open in the system browser;
 - Focus mode for a fullscreen, chrome-free Outlook window;
 - configurable start view, downloads, save prompts, and dock icons;
 - optional background startup for notifications;
 - Outlook handling for `mailto:` links;
+- automatic daily update checks and verified in-app updates;
 - desktop actions for Mail, Calendar, New Message, New Event, and Settings.
 
 No account credentials are requested or stored by the installer. Microsoft
@@ -81,7 +83,7 @@ To verify the release without installing it:
 ./install-outlook --download-only outlook-release
 cd outlook-release
 sha256sum --check --strict --ignore-missing SHA256SUMS
-gh attestation verify outlook-pwa-linux_0.2.9_amd64.deb \
+gh attestation verify outlook-pwa-linux_0.3.0_amd64.deb \
   --repo andershfranzen/outlook-pwa-linux
 ```
 
@@ -93,7 +95,7 @@ If Microsoft's Edge repository is already configured, download the `.deb` and
 `SHA256SUMS` from the release page, verify them, then use:
 
 ```sh
-sudo apt install ./outlook-pwa-linux_0.2.9_amd64.deb
+sudo apt install ./outlook-pwa-linux_0.3.0_amd64.deb
 ```
 
 The bootstrap installer is recommended on a clean system because a bare `.deb`
@@ -122,6 +124,13 @@ outlook-pwa --diagnose
 
 The dedicated Edge data and wrapper settings live in
 `~/.config/outlook-pwa-linux` unless `XDG_CONFIG_HOME` is set.
+
+Outlook checks the latest immutable GitHub release once per day. When an
+update is available, a small indicator appears on the sliders button and the
+Software updates section in Settings offers a one-click update. The package is
+matched against both GitHub's release-asset digest and `SHA256SUMS`, inspected
+before installation, then independently revalidated after administrator
+authentication. Updates never alter Outlook profiles or Microsoft sign-in data.
 
 ## Build from source
 

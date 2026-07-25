@@ -9,6 +9,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import threading
 
 import gi
 
@@ -18,8 +19,11 @@ gi.require_version("GdkWayland", "4.0")
 gi.require_version("Gtk", "4.0")
 from gi.repository import Adw, Gdk, GdkWayland, Gio, GLib, Gtk  # noqa: E402
 
+source_library = Path(__file__).resolve().parent
 installed_library = Path("/usr/lib/outlook-pwa-linux")
-if installed_library.is_dir():
+if (source_library / "outlook_pwa_common.py").is_file():
+    sys.path.insert(0, str(source_library))
+elif installed_library.is_dir():
     sys.path.insert(0, str(installed_library))
 
 from outlook_pwa_common import (  # noqa: E402
@@ -39,6 +43,14 @@ from outlook_pwa_common import (  # noqa: E402
     save_settings,
     user_data_dir,
     wayland_app_id,
+)
+from outlook_pwa_updater import (  # noqa: E402
+    Release,
+    UpdateError,
+    check_for_update,
+    download_update,
+    format_checked_time,
+    install_update,
 )
 
 
@@ -72,6 +84,9 @@ class SettingsWindow(Adw.ApplicationWindow):
         self.profile_ids: list[str] = []
         self.profile_id = str(self.settings["default_profile"])
         self.loading = True
+        self.update_busy = False
+        self.update_release: Release | None = None
+        self.update_installed_version: str | None = None
 
         self.toast_overlay = Adw.ToastOverlay()
         self.set_content(self.toast_overlay)
@@ -98,6 +113,7 @@ class SettingsWindow(Adw.ApplicationWindow):
         self.build_appearance_group(page)
         self.build_integration_group(page)
         self.build_downloads_group(page)
+        self.build_updates_group(page)
         self.build_maintenance_group(page)
         self.build_footer(page)
 
@@ -105,6 +121,7 @@ class SettingsWindow(Adw.ApplicationWindow):
         self.load_profile(self.profile_id)
         self.apply_header_style()
         self.loading = False
+        GLib.idle_add(self.start_update_check, False)
 
     def on_map(self, _window) -> None:
         surface = self.get_surface()
@@ -313,6 +330,47 @@ class SettingsWindow(Adw.ApplicationWindow):
         reset_row.connect("activated", self.on_reset_profile)
         group.add(reset_row)
 
+    def build_updates_group(self, page: Adw.PreferencesPage) -> None:
+        group = Adw.PreferencesGroup()
+        group.set_title("Software updates")
+        group.set_description(
+            "Outlook checks the latest immutable GitHub release once a day."
+        )
+        page.add(group)
+
+        self.update_row = Adw.ActionRow()
+        self.update_row.set_title(f"Outlook {VERSION}")
+        self.update_row.set_subtitle("Checking for updates…")
+        update_icon = Gtk.Image.new_from_icon_name(
+            "software-update-available-symbolic"
+        )
+        self.update_row.add_prefix(update_icon)
+        group.add(self.update_row)
+
+        self.update_spinner = Gtk.Spinner(valign=Gtk.Align.CENTER)
+        self.update_spinner.set_spinning(True)
+        self.update_row.add_suffix(self.update_spinner)
+
+        self.update_button = Gtk.Button(
+            label="Update",
+            valign=Gtk.Align.CENTER,
+            visible=False,
+        )
+        self.update_button.add_css_class("suggested-action")
+        self.update_button.connect("clicked", self.on_update_action)
+        self.update_row.add_suffix(self.update_button)
+
+        self.check_update_button = Gtk.Button(
+            icon_name="view-refresh-symbolic",
+            tooltip_text="Check for updates now",
+            valign=Gtk.Align.CENTER,
+        )
+        self.check_update_button.add_css_class("flat")
+        self.check_update_button.connect(
+            "clicked", lambda _button: self.start_update_check(True)
+        )
+        self.update_row.add_suffix(self.check_update_button)
+
     def build_footer(self, page: Adw.PreferencesPage) -> None:
         group = Adw.PreferencesGroup()
         footer = Gtk.Label(
@@ -388,6 +446,153 @@ class SettingsWindow(Adw.ApplicationWindow):
 
     def toast(self, message: str) -> None:
         self.toast_overlay.add_toast(Adw.Toast.new(message))
+
+    def set_update_busy(self, busy: bool, status: str | None = None) -> None:
+        self.update_busy = busy
+        self.update_spinner.set_visible(busy)
+        self.update_spinner.set_spinning(busy)
+        self.check_update_button.set_sensitive(not busy)
+        self.update_button.set_sensitive(not busy)
+        if status:
+            self.update_row.set_subtitle(status)
+
+    def start_update_check(self, force: bool) -> bool:
+        if self.update_busy:
+            return False
+        self.update_button.set_visible(False)
+        self.set_update_busy(True, "Checking for updates…")
+        threading.Thread(
+            target=self.check_update_worker,
+            args=(force,),
+            daemon=True,
+            name="outlook-update-check",
+        ).start()
+        return False
+
+    def check_update_worker(self, force: bool) -> None:
+        try:
+            release = check_for_update(force=force)
+        except UpdateError as error:
+            GLib.idle_add(self.finish_update_check, None, str(error))
+            return
+        GLib.idle_add(self.finish_update_check, release, None)
+
+    def finish_update_check(
+        self, release: Release | None, error: str | None
+    ) -> bool:
+        self.set_update_busy(False)
+        if error:
+            self.update_release = None
+            self.update_row.set_subtitle(f"Could not check for updates — {error}")
+            return False
+        assert release is not None
+        self.update_release = release
+        if release.available:
+            self.update_row.set_subtitle(
+                f"Version {release.version} is ready to install"
+            )
+            self.update_button.set_label(f"Update to {release.version}")
+            self.update_button.set_visible(True)
+        else:
+            self.update_row.set_subtitle(
+                f"Up to date · checked at {format_checked_time()}"
+            )
+            self.update_button.set_visible(False)
+        return False
+
+    def on_update_action(self, _button) -> None:
+        if self.update_installed_version:
+            self.restart_outlook()
+            return
+        if not self.update_release or not self.update_release.available:
+            return
+        dialog = Adw.AlertDialog()
+        dialog.set_heading(f"Update Outlook to {self.update_release.version}?")
+        dialog.set_body(
+            "The package will be downloaded from the project’s immutable "
+            "GitHub release, verified twice, and installed after administrator "
+            "authentication. Your Outlook profiles and settings are kept."
+        )
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("update", "Download and Update")
+        dialog.set_close_response("cancel")
+        dialog.set_default_response("update")
+        dialog.set_response_appearance(
+            "update", Adw.ResponseAppearance.SUGGESTED
+        )
+        dialog.connect("response", self.finish_update_confirmation)
+        dialog.present(self)
+
+    def finish_update_confirmation(self, _dialog, response: str) -> None:
+        if response != "update" or not self.update_release:
+            return
+        release = self.update_release
+        self.update_button.set_visible(False)
+        self.set_update_busy(True, f"Downloading Outlook {release.version}…")
+        threading.Thread(
+            target=self.install_update_worker,
+            args=(release,),
+            daemon=True,
+            name="outlook-update-install",
+        ).start()
+
+    def install_update_worker(self, release: Release) -> None:
+        try:
+            package_path = download_update(release)
+            GLib.idle_add(
+                self.update_row.set_subtitle,
+                "Verified · waiting for administrator authentication…",
+            )
+            install_update(release, package_path)
+            launcher = shutil.which("outlook-pwa") or "/usr/bin/outlook-pwa"
+            subprocess.run(
+                (launcher, "--reconcile-launchers"),
+                check=False,
+                capture_output=True,
+                timeout=30,
+            )
+        except (OSError, subprocess.SubprocessError, UpdateError) as error:
+            GLib.idle_add(self.finish_update_install, None, str(error))
+            return
+        GLib.idle_add(self.finish_update_install, release.version, None)
+
+    def finish_update_install(
+        self, version: str | None, error: str | None
+    ) -> bool:
+        self.set_update_busy(False)
+        if error:
+            self.update_row.set_subtitle(f"Update failed — {error}")
+            self.update_button.set_label("Try Again")
+            self.update_button.set_visible(bool(self.update_release))
+            return False
+        assert version is not None
+        self.update_installed_version = version
+        self.update_row.set_title(f"Outlook {version}")
+        self.update_row.set_subtitle(
+            "Update installed · restart Outlook to finish"
+        )
+        self.update_button.set_label("Restart Outlook")
+        self.update_button.set_visible(True)
+        self.check_update_button.set_visible(False)
+        self.toast(f"Outlook {version} is installed")
+        return False
+
+    def restart_outlook(self) -> None:
+        launcher = shutil.which("outlook-pwa") or "/usr/bin/outlook-pwa"
+        try:
+            subprocess.Popen(
+                (launcher, "--restart", "--profile", self.profile_id),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except OSError as error:
+            self.toast(f"Could not restart Outlook: {error}")
+            return
+        application = self.get_application()
+        if application:
+            application.quit()
 
     def on_profile_selected(self, row, _spec) -> None:
         if self.loading or row.get_selected() >= len(self.profile_ids):

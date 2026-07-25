@@ -9,6 +9,7 @@ release_source=$(mktemp -d)
 verified_download=$(mktemp -d)
 tampered_source=$(mktemp -d)
 tampered_download=$(mktemp -d)
+package_root=$(mktemp -d)
 
 # Invoked by the trap below.
 # shellcheck disable=SC2329
@@ -17,7 +18,8 @@ cleanup() {
         "$release_source" \
         "$verified_download" \
         "$tampered_source" \
-        "$tampered_download"
+        "$tampered_download" \
+        "$package_root"
 }
 trap cleanup EXIT HUP INT TERM
 
@@ -30,6 +32,28 @@ test "$("$project_root/install-outlook" --version)" = \
 test -x "$project_root/dist/install-outlook"
 test -f "$project_root/dist/$asset_name"
 test -f "$project_root/dist/SHA256SUMS"
+dpkg-deb --extract "$project_root/dist/$asset_name" "$package_root"
+test -x "$package_root/usr/lib/outlook-pwa-linux/outlook-update-helper"
+test -f "$package_root/usr/lib/outlook-pwa-linux/outlook_pwa_updater.py"
+test -f \
+    "$package_root/usr/share/polkit-1/actions/com.outlook_pwa_linux.update.policy"
+test -f \
+    "$package_root/usr/share/outlook-pwa-linux/extension/background-v030.js"
+test -f \
+    "$package_root/usr/share/outlook-pwa-linux/extension/a5-settings.svg"
+test -f \
+    "$package_root/usr/share/outlook-pwa-linux/branding/a5-settings.svg"
+test ! -e \
+    "$package_root/usr/share/outlook-pwa-linux/extension/background-v029.js"
+python3 - <<PY
+import xml.etree.ElementTree as ET
+ET.parse(
+    "$package_root/usr/share/polkit-1/actions/"
+    "com.outlook_pwa_linux.update.policy"
+)
+PY
+dpkg-deb --field "$project_root/dist/$asset_name" Depends |
+    grep -Eq '(^|, )pkexec(,|$)'
 first_package_checksum=$(
     sha256sum "$project_root/dist/$asset_name" | awk '{ print $1 }'
 )

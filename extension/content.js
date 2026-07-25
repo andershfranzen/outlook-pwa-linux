@@ -5,6 +5,8 @@ let integrationConfig = {
   routeExternalLinks: false,
   internalDomains: [],
 };
+let updateStatus = null;
+let updateCheckInFlight = false;
 
 function hostMatches(hostname, domain) {
   const normalizedHost = hostname.toLowerCase();
@@ -44,6 +46,7 @@ function settingsControlCandidate() {
   const direct = document.querySelector(
     [
       "#O365_SettingsButton",
+      "#owaSettingsBtn_container",
       "#SettingsIcon",
       "button[data-automation-id='settingsButton']",
       "button[aria-label='Settings']",
@@ -101,6 +104,20 @@ function styleSettingsControl(button, outlookSettings) {
   );
 }
 
+function applyUpdateIndicator(button) {
+  const badge = document.getElementById("outlook-pwa-linux-update-badge");
+  const available =
+    updateStatus?.ok === true && updateStatus.updateAvailable === true;
+  if (badge) {
+    badge.style.display = available ? "block" : "none";
+  }
+  const description = available
+    ? `Outlook for Linux settings — update ${updateStatus.latestVersion} available`
+    : "Outlook for Linux settings";
+  button.setAttribute("aria-label", description);
+  button.title = description;
+}
+
 function reserveSettingsControlSpace(button, outlookSettings) {
   const region = outlookSettings.parentElement;
   const host = region?.parentElement;
@@ -134,6 +151,7 @@ function installSettingsControl() {
   const existing = document.getElementById("outlook-pwa-linux-settings");
   if (existing) {
     styleSettingsControl(existing, outlookSettings);
+    applyUpdateIndicator(existing);
     if (
       existing.parentElement !== outlookSettings.parentElement ||
       existing.nextElementSibling !== outlookSettings
@@ -150,15 +168,34 @@ function installSettingsControl() {
   button.setAttribute("data-outlook-pwa-control", "wrapper-settings");
   button.title = "Outlook for Linux settings";
   styleSettingsControl(button, outlookSettings);
-  button.innerHTML = `
-    <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24"
-         fill="none" stroke="currentColor" stroke-width="1.8"
-         stroke-linecap="round" stroke-linejoin="round">
-      <path d="M4 6h10M18 6h2M4 12h2M10 12h10M4 18h7M15 18h5"/>
-      <circle cx="16" cy="6" r="2"/>
-      <circle cx="8" cy="12" r="2"/>
-      <circle cx="13" cy="18" r="2"/>
-    </svg>`;
+  const brandIcon = document.createElement("img");
+  brandIcon.src = chrome.runtime.getURL("a5-settings.svg");
+  brandIcon.alt = "";
+  brandIcon.setAttribute("aria-hidden", "true");
+  brandIcon.setAttribute("draggable", "false");
+  brandIcon.style.cssText = [
+    "display:block",
+    "height:24px",
+    "pointer-events:none",
+    "user-select:none",
+    "width:24px",
+  ].join(";");
+  button.appendChild(brandIcon);
+  const badge = document.createElement("span");
+  badge.id = "outlook-pwa-linux-update-badge";
+  badge.setAttribute("aria-hidden", "true");
+  badge.style.cssText = [
+    "background:#d83b01",
+    "border:2px solid currentColor",
+    "border-radius:50%",
+    "display:none",
+    "height:8px",
+    "position:absolute",
+    "right:7px",
+    "top:7px",
+    "width:8px",
+  ].join(";");
+  button.appendChild(badge);
   button.addEventListener("mouseenter", () => {
     button.style.background = "rgba(255,255,255,.14)";
   });
@@ -171,7 +208,26 @@ function installSettingsControl() {
     chrome.runtime.sendMessage({ type: "open-settings" });
   });
   outlookSettings.parentElement.insertBefore(button, outlookSettings);
+  applyUpdateIndicator(button);
   reserveSettingsControlSpace(button, outlookSettings);
+}
+
+function requestUpdateStatus() {
+  if (updateCheckInFlight) {
+    return;
+  }
+  updateCheckInFlight = true;
+  chrome.runtime.sendMessage({ type: "check-update" }, (response) => {
+    updateCheckInFlight = false;
+    if (chrome.runtime.lastError || !response) {
+      return;
+    }
+    updateStatus = response;
+    const button = document.getElementById("outlook-pwa-linux-settings");
+    if (button) {
+      applyUpdateIndicator(button);
+    }
+  });
 }
 
 let settingsControlTimer;
@@ -200,6 +256,7 @@ async function loadConfiguration() {
     });
   }
   scheduleSettingsControl();
+  requestUpdateStatus();
 }
 
 document.addEventListener(
@@ -237,6 +294,10 @@ document.addEventListener(
 );
 
 void loadConfiguration();
+
+if (typeof window !== "undefined") {
+  window.setInterval(requestUpdateStatus, 60 * 60 * 1000);
+}
 
 const settingsControlObserver = new MutationObserver(scheduleSettingsControl);
 settingsControlObserver.observe(document.documentElement, {

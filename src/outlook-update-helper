@@ -1,0 +1,132 @@
+#!/usr/bin/python3
+"""Privileged, fail-closed installer for verified Outlook updates."""
+
+from __future__ import annotations
+
+import hashlib
+import os
+from pathlib import Path
+import stat
+import subprocess
+import sys
+import tempfile
+from typing import NoReturn
+
+from outlook_pwa_common import VERSION
+from outlook_pwa_updater import (
+    UpdateError,
+    fetch_latest_release,
+    validate_package_fields,
+    version_tuple,
+)
+
+
+def fail(message: str) -> NoReturn:
+    print(f"outlook-update-helper: {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+def copy_verified(
+    source: Path, expected_sha256: str, expected_size: int
+) -> Path:
+    flags = os.O_RDONLY | os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    source_fd = os.open(source, flags)
+    temporary_fd, temporary_name = tempfile.mkstemp(
+        prefix="outlook-pwa-linux-update-", suffix=".deb", dir="/var/tmp"
+    )
+    try:
+        source_stat = os.fstat(source_fd)
+        if not stat.S_ISREG(source_stat.st_mode):
+            raise UpdateError("the update package is not a regular file")
+        if source_stat.st_size != expected_size:
+            raise UpdateError("the update package size does not match GitHub")
+        digest = hashlib.sha256()
+        received = 0
+        with os.fdopen(source_fd, "rb", closefd=True) as input_stream:
+            source_fd = -1
+            with os.fdopen(temporary_fd, "wb", closefd=True) as output_stream:
+                temporary_fd = -1
+                while True:
+                    chunk = input_stream.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    received += len(chunk)
+                    if received > expected_size:
+                        raise UpdateError(
+                            "the update package grew while it was being verified"
+                        )
+                    digest.update(chunk)
+                    output_stream.write(chunk)
+                output_stream.flush()
+                os.fsync(output_stream.fileno())
+        if received != expected_size:
+            raise UpdateError(
+                "the update package changed while it was being verified"
+            )
+        if digest.hexdigest() != expected_sha256:
+            raise UpdateError("the update package changed after verification")
+        os.chmod(temporary_name, 0o600)
+        return Path(temporary_name)
+    except Exception:
+        try:
+            os.unlink(temporary_name)
+        except FileNotFoundError:
+            pass
+        raise
+    finally:
+        if source_fd >= 0:
+            os.close(source_fd)
+        if temporary_fd >= 0:
+            os.close(temporary_fd)
+
+
+def main() -> int:
+    if os.geteuid() != 0:
+        fail("this helper must run as root")
+    if len(sys.argv) != 4:
+        fail("invalid arguments")
+    source = Path(sys.argv[1])
+    requested_version = sys.argv[2]
+    requested_digest = sys.argv[3].lower()
+    try:
+        if version_tuple(requested_version) <= version_tuple(VERSION):
+            raise UpdateError("the requested release is not newer than this installation")
+        release = fetch_latest_release()
+        if release.version != requested_version:
+            raise UpdateError("the requested version is not GitHub’s latest release")
+        if release.package.sha256 != requested_digest:
+            raise UpdateError("the requested digest does not match GitHub")
+        package_copy = copy_verified(
+            source,
+            requested_digest,
+            release.package.size,
+        )
+        try:
+            validate_package_fields(package_copy, requested_version)
+            environment = {
+                "PATH": "/usr/sbin:/usr/bin:/sbin:/bin",
+                "DEBIAN_FRONTEND": "noninteractive",
+                "LANG": "C.UTF-8",
+            }
+            subprocess.run(
+                (
+                    "/usr/bin/apt-get",
+                    "install",
+                    "--yes",
+                    str(package_copy),
+                ),
+                check=True,
+                env=environment,
+            )
+        finally:
+            package_copy.unlink(missing_ok=True)
+    except (OSError, subprocess.SubprocessError, UpdateError) as error:
+        fail(str(error))
+    print(f"Outlook {requested_version} was installed.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

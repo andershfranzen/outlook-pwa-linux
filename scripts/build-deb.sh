@@ -38,7 +38,9 @@ mkdir -p \
     "$stage_dir/usr/lib/outlook-pwa-linux" \
     "$stage_dir/usr/share/applications" \
     "$stage_dir/usr/share/doc/outlook-pwa-linux" \
-    "$stage_dir/usr/share/outlook-pwa-linux/extension"
+    "$stage_dir/usr/share/outlook-pwa-linux/branding" \
+    "$stage_dir/usr/share/outlook-pwa-linux/extension" \
+    "$stage_dir/usr/share/polkit-1/actions"
 
 install -m 0644 "$project_root/packaging/control" "$stage_dir/DEBIAN/control"
 install -m 0644 "$project_root/packaging/conffiles" "$stage_dir/DEBIAN/conffiles"
@@ -51,9 +53,15 @@ install -m 0755 \
 install -m 0644 \
     "$project_root/src/outlook_pwa_common.py" \
     "$stage_dir/usr/lib/outlook-pwa-linux/outlook_pwa_common.py"
+install -m 0644 \
+    "$project_root/src/outlook_pwa_updater.py" \
+    "$stage_dir/usr/lib/outlook-pwa-linux/outlook_pwa_updater.py"
 install -m 0755 \
     "$project_root/src/outlook-link-router" \
     "$stage_dir/usr/lib/outlook-pwa-linux/outlook-link-router"
+install -m 0755 \
+    "$project_root/src/outlook-update-helper" \
+    "$stage_dir/usr/lib/outlook-pwa-linux/outlook-update-helper"
 install -m 0644 \
     "$project_root/packaging/msedge-_faolnafnngnfdaknnbpnkhgohbobgegn-Default.desktop" \
     "$stage_dir/usr/share/applications/msedge-_faolnafnngnfdaknnbpnkhgohbobgegn-Default.desktop"
@@ -67,11 +75,20 @@ for size in 16 32 48 64 128 256; do
         "$project_root/assets/icons/${size}x${size}/outlook-pwa-linux.png" \
         "$icon_dir/outlook-pwa-linux.png"
 done
-for extension_file in manifest.json content.js background-v029.js config.json; do
+for extension_file in manifest.json content.js background-v030.js config.json; do
     install -m 0644 \
         "$project_root/extension/$extension_file" \
         "$stage_dir/usr/share/outlook-pwa-linux/extension/$extension_file"
 done
+install -m 0644 \
+    "$project_root/assets/branding/a5-settings.svg" \
+    "$stage_dir/usr/share/outlook-pwa-linux/branding/a5-settings.svg"
+install -m 0644 \
+    "$project_root/assets/branding/a5-settings.svg" \
+    "$stage_dir/usr/share/outlook-pwa-linux/extension/a5-settings.svg"
+install -m 0644 \
+    "$project_root/packaging/com.outlook_pwa_linux.update.policy" \
+    "$stage_dir/usr/share/polkit-1/actions/com.outlook_pwa_linux.update.policy"
 install -m 0644 \
     "$project_root/packaging/outlook-pwa-policy.json" \
     "$stage_dir/etc/opt/edge/policies/managed/outlook-pwa-linux.json"

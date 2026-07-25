@@ -7,6 +7,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   let nativeMessage;
   if (message.type === "open-settings") {
     nativeMessage = { command: "open-settings" };
+  } else if (message.type === "check-update") {
+    nativeMessage = {
+      command: "check-update",
+      force: message.force === true,
+    };
   } else if (
     message.type === "open-external" &&
     typeof message.url === "string"

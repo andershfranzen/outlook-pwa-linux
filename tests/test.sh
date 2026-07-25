@@ -15,7 +15,20 @@ python3 -m py_compile \
     "$project_root/src/outlook-pwa" \
     "$project_root/src/outlook-pwa-settings" \
     "$project_root/src/outlook-link-router" \
-    "$project_root/src/outlook_pwa_common.py"
+    "$project_root/src/outlook-update-helper" \
+    "$project_root/src/outlook_pwa_common.py" \
+    "$project_root/src/outlook_pwa_updater.py"
+
+python3 "$project_root/tests/test-updater.py"
+
+if "$project_root/src/outlook-update-helper" \
+    /tmp/not-an-update.deb 9.9.9 "$(
+        printf '0%.0s' $(seq 1 64)
+    )" >"$test_home/helper.log" 2>&1; then
+    echo "The privileged update helper ran without root." >&2
+    exit 1
+fi
+grep -q "must run as root" "$test_home/helper.log"
 
 PYTHONPATH="$project_root/src" python3 - <<'PY'
 from copy import deepcopy
@@ -55,6 +68,7 @@ extension = common.sync_extension(loaded)
 configuration = json.loads((extension / "config.json").read_text())
 assert configuration["themeColor"] == "#0f6cbd"
 assert configuration["routeExternalLinks"] is True
+assert (extension / "a5-settings.svg").is_file()
 theme = json.loads(
     (common.app_config_dir() / "titlebar-theme" / "manifest.json").read_text()
 )
@@ -167,7 +181,7 @@ PY
 desktop-file-validate \
     "$project_root/packaging/msedge-_faolnafnngnfdaknnbpnkhgohbobgegn-Default.desktop" \
     "$project_root/packaging/com.outlook_pwa_linux.settings.desktop"
-jq -e '.manifest_version == 3 and .version == "0.2.9"' \
+jq -e '.manifest_version == 3 and .version == "0.3.0"' \
     "$project_root/extension/manifest.json" >/dev/null
 jq -e \
     '.WebAppInstallForceList[0].fallback_app_name == "Outlook"
@@ -175,8 +189,8 @@ jq -e \
     "$project_root/packaging/outlook-pwa-policy.json" >/dev/null
 if command -v node >/dev/null 2>&1; then
     node --check "$project_root/extension/content.js"
-    node --check "$project_root/extension/background-v029.js"
+    node --check "$project_root/extension/background-v030.js"
     node "$project_root/tests/test-content-script.js"
 fi
 
-echo "Outlook v0.2.9 tests passed."
+echo "Outlook v0.3.0 tests passed."

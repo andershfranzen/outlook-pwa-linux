@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import signal
 import shlex
 import shutil
 import subprocess
@@ -14,8 +15,11 @@ import sys
 import time
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
+source_library = Path(__file__).resolve().parent
 installed_library = Path("/usr/lib/outlook-pwa-linux")
-if installed_library.is_dir():
+if (source_library / "outlook_pwa_common.py").is_file():
+    sys.path.insert(0, str(source_library))
+elif installed_library.is_dir():
     sys.path.insert(0, str(installed_library))
 
 from outlook_pwa_common import (  # noqa: E402
@@ -194,6 +198,11 @@ def parser() -> argparse.ArgumentParser:
         "--settings", action="store_true", help="open the native settings app"
     )
     result.add_argument(
+        "--restart",
+        action="store_true",
+        help="close the dedicated Edge instance and reopen Outlook",
+    )
+    result.add_argument(
         "--list-profiles", action="store_true", help="list configured profiles"
     )
     result.add_argument(
@@ -236,6 +245,51 @@ def start_detached(command: list[str]) -> None:
         stderr=subprocess.DEVNULL,
         start_new_session=True,
     )
+
+
+def dedicated_edge_processes() -> list[int]:
+    expected_argument = f"--user-data-dir={user_data_dir()}".encode()
+    processes: list[int] = []
+    try:
+        entries = Path("/proc").iterdir()
+    except OSError:
+        return processes
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        try:
+            executable_name = (entry / "exe").resolve(strict=True).name
+            if executable_name not in {
+                "msedge",
+                "microsoft-edge",
+                "microsoft-edge-stable",
+            }:
+                continue
+            command = (entry / "cmdline").read_bytes()
+        except OSError:
+            continue
+        # Chromium rewrites its process title after startup and may replace the
+        # original NUL-separated argv with one space-joined string.
+        if expected_argument in command:
+            processes.append(int(entry.name))
+    return processes
+
+
+def stop_dedicated_edge() -> bool:
+    processes = dedicated_edge_processes()
+    for process in processes:
+        try:
+            os.kill(process, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        except PermissionError:
+            return False
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        if not dedicated_edge_processes():
+            return True
+        time.sleep(0.1)
+    return not dedicated_edge_processes()
 
 
 def wait_and_reconcile(profile_id: str) -> int:
@@ -299,6 +353,12 @@ def main() -> int:
     if not args.dry_run:
         user_data_dir().mkdir(mode=0o700, parents=True, exist_ok=True)
         apply_user_integration(settings)
+        if args.restart and not stop_dedicated_edge():
+            print(
+                "outlook-pwa: Edge did not close; Outlook was not restarted",
+                file=sys.stderr,
+            )
+            return 1
     force_focus = True if args.focus else False if args.no_focus else None
     command = edge_command(
         edge,
