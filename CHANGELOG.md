@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.9
+
+- Preserved Outlook's official Settings button and click behavior.
+- Gave the Outlook for Linux settings control an independent adjacent hitbox.
+- Removed inherited Outlook toolbar classes that could overlap the two buttons.
+- Expanded Outlook's reserved toolbar region so the gear stays clear of the
+  account avatar.
+
 ## 0.2.8
 
 First public release candidate.

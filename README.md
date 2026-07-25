@@ -81,7 +81,7 @@ To verify the release without installing it:
 ./install-outlook --download-only outlook-release
 cd outlook-release
 sha256sum --check --strict --ignore-missing SHA256SUMS
-gh attestation verify outlook-pwa-linux_0.2.8_amd64.deb \
+gh attestation verify outlook-pwa-linux_0.2.9_amd64.deb \
   --repo andershfranzen/outlook-pwa-linux
 ```
 
@@ -93,7 +93,7 @@ If Microsoft's Edge repository is already configured, download the `.deb` and
 `SHA256SUMS` from the release page, verify them, then use:
 
 ```sh
-sudo apt install ./outlook-pwa-linux_0.2.8_amd64.deb
+sudo apt install ./outlook-pwa-linux_0.2.9_amd64.deb
 ```
 
 The bootstrap installer is recommended on a clean system because a bare `.deb`

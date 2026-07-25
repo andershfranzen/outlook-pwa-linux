@@ -12,7 +12,7 @@ import subprocess
 import tempfile
 from typing import Any
 
-VERSION = "0.2.8"
+VERSION = "0.2.9"
 APP_ID = "faolnafnngnfdaknnbpnkhgohbobgegn"
 EXTENSION_ID = "mfjjkdjhfcbabopnjmjapphchleaglcp"
 EXTENSION_HOST = "com.outlook_pwa_linux.link_router"
@@ -565,7 +565,7 @@ def sync_extension(settings: dict[str, Any]) -> Path | None:
     source = resource_root() / "extension"
     destination = app_config_dir() / "extension"
     destination.mkdir(mode=0o700, parents=True, exist_ok=True)
-    for filename in ("manifest.json", "content.js", "background-v028.js"):
+    for filename in ("manifest.json", "content.js", "background-v029.js"):
         source_file = source / filename
         if source_file.is_file():
             shutil.copyfile(source_file, destination / filename)

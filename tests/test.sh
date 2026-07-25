@@ -167,7 +167,7 @@ PY
 desktop-file-validate \
     "$project_root/packaging/msedge-_faolnafnngnfdaknnbpnkhgohbobgegn-Default.desktop" \
     "$project_root/packaging/com.outlook_pwa_linux.settings.desktop"
-jq -e '.manifest_version == 3 and .version == "0.2.8"' \
+jq -e '.manifest_version == 3 and .version == "0.2.9"' \
     "$project_root/extension/manifest.json" >/dev/null
 jq -e \
     '.WebAppInstallForceList[0].fallback_app_name == "Outlook"
@@ -175,7 +175,8 @@ jq -e \
     "$project_root/packaging/outlook-pwa-policy.json" >/dev/null
 if command -v node >/dev/null 2>&1; then
     node --check "$project_root/extension/content.js"
-    node --check "$project_root/extension/background-v028.js"
+    node --check "$project_root/extension/background-v029.js"
+    node "$project_root/tests/test-content-script.js"
 fi
 
-echo "Outlook v0.2.8 tests passed."
+echo "Outlook v0.2.9 tests passed."

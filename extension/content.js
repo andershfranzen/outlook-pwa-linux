@@ -68,6 +68,64 @@ function settingsControlCandidate() {
   );
 }
 
+function styleSettingsControl(button, outlookSettings) {
+  button.className = "outlook-pwa-linux-control";
+  button.style.cssText = [
+    "align-items:center",
+    "appearance:none",
+    "background:transparent",
+    "border:0",
+    "border-radius:2px",
+    "box-sizing:border-box",
+    "color:inherit",
+    "cursor:pointer",
+    "display:inline-flex",
+    "flex:0 0 48px",
+    "height:48px",
+    "inset:auto",
+    "isolation:isolate",
+    "justify-content:center",
+    "line-height:0",
+    "margin:0",
+    "min-width:48px",
+    "padding:5px",
+    "pointer-events:auto",
+    "position:relative",
+    "width:48px",
+    "z-index:auto",
+  ].join(";");
+  button.style.setProperty(
+    "color",
+    getComputedStyle(outlookSettings).color,
+    "important",
+  );
+}
+
+function reserveSettingsControlSpace(button, outlookSettings) {
+  const region = outlookSettings.parentElement;
+  const host = region?.parentElement;
+  if (region?.id !== "headerButtonsRegionId" || !host) {
+    return;
+  }
+
+  const baseWidthAttribute = "data-outlook-pwa-base-width";
+  let baseWidth = Number.parseFloat(host.getAttribute(baseWidthAttribute) || "");
+  if (!Number.isFinite(baseWidth)) {
+    const computedBasis = Number.parseFloat(getComputedStyle(host).flexBasis);
+    baseWidth = Math.max(
+      host.getBoundingClientRect().width,
+      Number.isFinite(computedBasis) ? computedBasis : 0,
+    );
+    host.setAttribute(baseWidthAttribute, String(baseWidth));
+  }
+
+  const controlWidth = button.getBoundingClientRect().width || 48;
+  const requiredWidth = Math.ceil(baseWidth + controlWidth);
+  host.style.setProperty("flex", `0 2 ${requiredWidth}px`, "important");
+  host.style.setProperty("min-width", `${requiredWidth}px`, "important");
+  host.style.setProperty("width", `${requiredWidth}px`, "important");
+}
+
 function installSettingsControl() {
   const outlookSettings = settingsControlCandidate();
   if (!outlookSettings?.parentElement) {
@@ -75,38 +133,23 @@ function installSettingsControl() {
   }
   const existing = document.getElementById("outlook-pwa-linux-settings");
   if (existing) {
-    existing.style.setProperty(
-      "color",
-      getComputedStyle(outlookSettings).color,
-      "important",
-    );
+    styleSettingsControl(existing, outlookSettings);
+    if (
+      existing.parentElement !== outlookSettings.parentElement ||
+      existing.nextElementSibling !== outlookSettings
+    ) {
+      outlookSettings.parentElement.insertBefore(existing, outlookSettings);
+    }
+    reserveSettingsControlSpace(existing, outlookSettings);
     return;
   }
   const button = document.createElement("button");
   button.id = "outlook-pwa-linux-settings";
   button.type = "button";
-  button.className = outlookSettings.className;
-  button.setAttribute("aria-label", "Linux app settings");
-  button.title = "Linux app settings";
-  button.style.cssText = [
-    "align-items:center",
-    "background:transparent",
-    "border:0",
-    "border-radius:4px",
-    "box-sizing:border-box",
-    "cursor:pointer",
-    "display:inline-flex",
-    "height:32px",
-    "justify-content:center",
-    "margin:0 2px",
-    "padding:6px",
-    "width:32px",
-  ].join(";");
-  button.style.setProperty(
-    "color",
-    getComputedStyle(outlookSettings).color,
-    "important",
-  );
+  button.setAttribute("aria-label", "Outlook for Linux settings");
+  button.setAttribute("data-outlook-pwa-control", "wrapper-settings");
+  button.title = "Outlook for Linux settings";
+  styleSettingsControl(button, outlookSettings);
   button.innerHTML = `
     <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24"
          fill="none" stroke="currentColor" stroke-width="1.8"
@@ -128,6 +171,7 @@ function installSettingsControl() {
     chrome.runtime.sendMessage({ type: "open-settings" });
   });
   outlookSettings.parentElement.insertBefore(button, outlookSettings);
+  reserveSettingsControlSpace(button, outlookSettings);
 }
 
 let settingsControlTimer;

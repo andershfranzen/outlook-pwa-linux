@@ -67,7 +67,7 @@ for size in 16 32 48 64 128 256; do
         "$project_root/assets/icons/${size}x${size}/outlook-pwa-linux.png" \
         "$icon_dir/outlook-pwa-linux.png"
 done
-for extension_file in manifest.json content.js background-v028.js config.json; do
+for extension_file in manifest.json content.js background-v029.js config.json; do
     install -m 0644 \
         "$project_root/extension/$extension_file" \
         "$stage_dir/usr/share/outlook-pwa-linux/extension/$extension_file"
