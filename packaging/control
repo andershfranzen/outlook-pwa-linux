@@ -1,0 +1,18 @@
+Package: outlook-pwa-linux
+Version: 0.2.8
+Section: net
+Priority: optional
+Architecture: amd64
+Installed-Size: 420
+Depends: microsoft-edge-stable, python3 (>= 3.10), python3-gi, gir1.2-gtk-4.0, gir1.2-adw-1
+Recommends: libnotify-bin
+Maintainer: afive <andershfranzen@users.noreply.github.com>
+Homepage: https://github.com/andershfranzen/outlook-pwa-linux
+Vcs-Git: https://github.com/andershfranzen/outlook-pwa-linux.git
+Vcs-Browser: https://github.com/andershfranzen/outlook-pwa-linux
+Description: Outlook desktop integration for Linux
+ Installs a desktop-integrated Outlook web application backed by Microsoft
+ Edge, with isolated account profiles, a native settings app, customizable
+ PWA title-bar colors, Firefox link routing, mailto handling, configurable
+ downloads, notifications, and mail/calendar shortcuts. This is an unofficial
+ integration package.

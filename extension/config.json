@@ -1,0 +1,17 @@
+{
+  "themeColor": "#0f6cbd",
+  "routeExternalLinks": true,
+  "internalDomains": [
+    "outlook.office.com",
+    "outlook.live.com",
+    "office.com",
+    "office365.com",
+    "microsoft365.com",
+    "login.microsoftonline.com",
+    "login.live.com",
+    "microsoft.com",
+    "sharepoint.com",
+    "onedrive.live.com",
+    "officeapps.live.com"
+  ]
+}

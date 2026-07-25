@@ -1,0 +1,14 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Outlook Settings
+GenericName=Outlook Preferences
+Comment=Configure Outlook for Linux
+Exec=/usr/bin/outlook-pwa-settings
+Icon=outlook-pwa-linux
+Terminal=false
+Categories=Settings;
+Keywords=Outlook;Mail;Calendar;Settings;
+StartupNotify=true
+StartupWMClass=com.outlook_pwa_linux.settings
+NoDisplay=true

@@ -1,0 +1,46 @@
+name: Bug report
+description: Report reproducible incorrect behavior
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include credentials, cookies, mailbox content, or browser-profile files.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Describe the actual and expected behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction steps
+      placeholder: |
+        1. Open Outlook
+        2. …
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Outlook for Linux version
+      placeholder: "0.2.8"
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: Distribution and desktop
+      placeholder: "Ubuntu 24.04, GNOME, Wayland"
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Relevant diagnostics
+      description: Paste only non-sensitive output from `outlook-pwa --diagnose`.
+      render: shell

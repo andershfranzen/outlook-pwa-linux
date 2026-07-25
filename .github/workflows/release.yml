@@ -1,0 +1,56 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  release:
+    name: Build, attest, and publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes desktop-file-utils jq
+
+      - name: Verify release tag
+        run: |
+          version=$(tr -d '[:space:]' < VERSION)
+          test "$GITHUB_REF_NAME" = "v$version"
+
+      - name: Build and test release artifacts
+        run: make release
+
+      - name: Attest release artifacts
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6  # v4
+        with:
+          subject-path: |
+            dist/outlook-pwa-linux_*_amd64.deb
+            dist/install-outlook
+            dist/SHA256SUMS
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(tr -d '[:space:]' < VERSION)
+          gh release create "$GITHUB_REF_NAME" \
+            dist/outlook-pwa-linux_*_amd64.deb \
+            dist/install-outlook \
+            dist/SHA256SUMS \
+            --generate-notes \
+            --latest \
+            --title "Outlook $version" \
+            --verify-tag

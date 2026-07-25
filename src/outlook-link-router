@@ -1,0 +1,92 @@
+#!/usr/bin/python3
+"""Native messaging host that safely opens one HTTP(S) URL."""
+
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+import shutil
+import struct
+import subprocess
+import sys
+from urllib.parse import urlparse
+
+MAX_MESSAGE_SIZE = 1024 * 1024
+MAX_URL_SIZE = 32768
+
+
+def read_message() -> dict[str, object]:
+    header = sys.stdin.buffer.read(4)
+    if len(header) != 4:
+        raise ValueError("missing native-message header")
+    length = struct.unpack("=I", header)[0]
+    if length < 2 or length > MAX_MESSAGE_SIZE:
+        raise ValueError("invalid native-message size")
+    payload = sys.stdin.buffer.read(length)
+    if len(payload) != length:
+        raise ValueError("incomplete native message")
+    message = json.loads(payload.decode("utf-8"))
+    if not isinstance(message, dict):
+        raise ValueError("message must be an object")
+    return message
+
+
+def write_message(message: dict[str, object]) -> None:
+    payload = json.dumps(message, separators=(",", ":")).encode("utf-8")
+    sys.stdout.buffer.write(struct.pack("=I", len(payload)))
+    sys.stdout.buffer.write(payload)
+    sys.stdout.buffer.flush()
+
+
+def open_url(url: object) -> None:
+    if not isinstance(url, str) or len(url) > MAX_URL_SIZE:
+        raise ValueError("invalid URL")
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError("only HTTP(S) URLs are allowed")
+    if os.environ.get("OUTLOOK_PWA_LINK_ROUTER_DRY_RUN") == "1":
+        return
+    opener = shutil.which("gio") or shutil.which("xdg-open")
+    if not opener:
+        raise RuntimeError("no desktop URL opener was found")
+    command = [opener, "open", url] if Path(opener).name == "gio" else [opener, url]
+    subprocess.Popen(
+        command,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+
+def open_settings() -> None:
+    if os.environ.get("OUTLOOK_PWA_LINK_ROUTER_DRY_RUN") == "1":
+        return
+    executable = shutil.which("outlook-pwa-settings")
+    if not executable:
+        raise RuntimeError("Outlook settings is not installed")
+    subprocess.Popen(
+        [executable],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+
+def main() -> int:
+    try:
+        message = read_message()
+        if message.get("command") == "open-settings":
+            open_settings()
+        else:
+            open_url(message.get("url"))
+        write_message({"ok": True})
+    except Exception as error:
+        write_message({"ok": False, "error": str(error)})
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

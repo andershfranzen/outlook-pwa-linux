@@ -1,0 +1,10 @@
+{
+  "WebAppInstallForceList": [
+    {
+      "url": "https://outlook.office.com/mail/",
+      "default_launch_container": "window",
+      "create_desktop_shortcut": false,
+      "fallback_app_name": "Outlook"
+    }
+  ]
+}

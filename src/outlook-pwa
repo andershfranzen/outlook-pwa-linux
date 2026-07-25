@@ -1,0 +1,335 @@
+#!/usr/bin/python3
+"""Launch Outlook's PWA in a configurable Microsoft Edge profile."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+from pathlib import Path
+import shlex
+import shutil
+import subprocess
+import sys
+import time
+from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
+
+installed_library = Path("/usr/lib/outlook-pwa-linux")
+if installed_library.is_dir():
+    sys.path.insert(0, str(installed_library))
+
+from outlook_pwa_common import (  # noqa: E402
+    APP_ID,
+    CALENDAR_URL,
+    COMPOSE_URL,
+    MAIL_URL,
+    NEW_EVENT_URL,
+    NATIVE_HOST_PATH,
+    POLICY_PATH,
+    VERSION,
+    app_config_dir,
+    apply_user_integration,
+    desktop_id,
+    edge_is_running,
+    extension_enabled,
+    find_edge,
+    get_profile,
+    load_settings,
+    profile_size,
+    pwa_is_installed,
+    reconcile_profile,
+    user_data_dir,
+)
+
+
+def mailto_to_outlook(uri: str) -> str:
+    parsed = urlparse(uri)
+    if parsed.scheme.lower() != "mailto":
+        raise ValueError("only mailto: links are accepted")
+
+    query = parse_qs(parsed.query, keep_blank_values=True)
+    fields: list[tuple[str, str]] = []
+    recipient = unquote(parsed.path)
+    if recipient:
+        fields.append(("to", recipient))
+
+    for source, destination in (
+        ("to", "to"),
+        ("cc", "cc"),
+        ("bcc", "bcc"),
+        ("subject", "subject"),
+        ("body", "body"),
+    ):
+        for value in query.get(source, []):
+            fields.append((destination, value))
+
+    encoded = urlencode(fields, doseq=True, quote_via=quote)
+    return f"{COMPOSE_URL}?{encoded}" if encoded else COMPOSE_URL
+
+
+def target_url(args: argparse.Namespace, profile: dict[str, object]) -> str:
+    if args.uri:
+        if len(args.uri) != 1:
+            raise ValueError("pass at most one mailto: link")
+        return mailto_to_outlook(args.uri[0])
+    if args.calendar:
+        return CALENDAR_URL
+    if args.new_event:
+        return NEW_EVENT_URL
+    if args.compose is not None:
+        if args.compose:
+            return f"{COMPOSE_URL}?{urlencode({'to': args.compose})}"
+        return COMPOSE_URL
+    return CALENDAR_URL if profile["start_view"] == "calendar" else MAIL_URL
+
+
+def edge_command(
+    edge: str,
+    settings: dict[str, object],
+    profile: dict[str, object],
+    url: str,
+    installed: bool,
+    *,
+    background: bool = False,
+    force_focus: bool | None = None,
+) -> list[str]:
+    command = [
+        edge,
+        f"--user-data-dir={user_data_dir()}",
+        f"--profile-directory={profile['edge_profile']}",
+        "--no-first-run",
+        "--no-default-browser-check",
+    ]
+    extension_path = app_config_dir() / "extension"
+    extension_paths: list[str] = []
+    if extension_enabled(settings) and extension_path.is_dir():
+        extension_paths.append(str(extension_path))
+    theme_path = app_config_dir() / "titlebar-theme"
+    if (
+        settings["titlebar_style"] != "system"
+        and (theme_path / "manifest.json").is_file()
+    ):
+        extension_paths.append(str(theme_path))
+    if extension_paths:
+        command.append(f"--load-extension={','.join(extension_paths)}")
+    if background:
+        command.append("--no-startup-window")
+        return command
+
+    focus = bool(profile["focus_mode"]) if force_focus is None else force_focus
+    if focus:
+        command.append("--start-fullscreen")
+    if installed:
+        command.extend((f"--app-id={APP_ID}", f"--app-url={MAIL_URL}"))
+        if url != MAIL_URL:
+            command.append(f"--app-launch-url-for-shortcuts-menu-item={url}")
+    else:
+        command.append(f"--app={url}")
+    return command
+
+
+def diagnostics(
+    settings: dict[str, object], profile_id: str, profile: dict[str, object]
+) -> dict[str, object]:
+    edge = find_edge()
+    return {
+        "version": VERSION,
+        "edge": edge,
+        "edge_installed": bool(edge),
+        "policy_path": str(POLICY_PATH),
+        "policy_installed": POLICY_PATH.is_file(),
+        "native_host_installed": NATIVE_HOST_PATH.is_file(),
+        "settings_path": str(app_config_dir() / "settings.json"),
+        "profile_id": profile_id,
+        "profile_name": profile["name"],
+        "edge_profile": profile["edge_profile"],
+        "profile_root": str(user_data_dir()),
+        "profile_exists": (
+            user_data_dir() / str(profile["edge_profile"])
+        ).is_dir(),
+        "profile_size_bytes": profile_size(profile),
+        "pwa_installed": pwa_is_installed(profile),
+        "edge_running": edge_is_running(),
+        "desktop_id": desktop_id(profile),
+        "extension_enabled": extension_enabled(settings),
+        "external_links_to_default_browser": bool(
+            settings["route_external_links"]
+        ),
+        "titlebar_style": settings["titlebar_style"],
+        "focus_mode": bool(profile["focus_mode"]),
+        "session_type": os.environ.get("XDG_SESSION_TYPE", "unknown"),
+        "desktop": os.environ.get("XDG_CURRENT_DESKTOP", "unknown"),
+    }
+
+
+def parser() -> argparse.ArgumentParser:
+    result = argparse.ArgumentParser(
+        description="Launch Outlook as a dedicated Microsoft Edge PWA."
+    )
+    destination = result.add_mutually_exclusive_group()
+    destination.add_argument(
+        "--calendar", action="store_true", help="open the Outlook calendar"
+    )
+    destination.add_argument(
+        "--new-event", action="store_true", help="create a calendar event"
+    )
+    destination.add_argument(
+        "--compose",
+        nargs="?",
+        const="",
+        metavar="ADDRESS",
+        help="create an email, optionally addressed to ADDRESS",
+    )
+    focus = result.add_mutually_exclusive_group()
+    focus.add_argument(
+        "--focus", action="store_true", help="launch fullscreen without a title bar"
+    )
+    focus.add_argument(
+        "--no-focus",
+        action="store_true",
+        help="ignore the profile's fullscreen preference",
+    )
+    result.add_argument("--profile", metavar="ID", help="use a configured profile")
+    result.add_argument(
+        "--settings", action="store_true", help="open the native settings app"
+    )
+    result.add_argument(
+        "--list-profiles", action="store_true", help="list configured profiles"
+    )
+    result.add_argument(
+        "--background",
+        action="store_true",
+        help="start Edge for background notifications without opening a window",
+    )
+    result.add_argument(
+        "--diagnose", action="store_true", help="print installation diagnostics"
+    )
+    result.add_argument("--dry-run", action="store_true", help=argparse.SUPPRESS)
+    result.add_argument(
+        "--reconcile-launchers", action="store_true", help=argparse.SUPPRESS
+    )
+    result.add_argument("--wait-for-pwa", action="store_true", help=argparse.SUPPRESS)
+    result.add_argument("--version", action="version", version=f"%(prog)s {VERSION}")
+    result.add_argument("uri", nargs="*", help=argparse.SUPPRESS)
+    return result
+
+
+def show_missing_edge() -> None:
+    message = (
+        "Microsoft Edge was not found. Re-run the Outlook PWA installer "
+        "or install the microsoft-edge-stable package."
+    )
+    if shutil.which("zenity") and os.environ.get("DISPLAY"):
+        subprocess.run(
+            ("zenity", "--error", "--title=Outlook", f"--text={message}"),
+            check=False,
+        )
+    else:
+        print(f"outlook-pwa: {message}", file=sys.stderr)
+
+
+def start_detached(command: list[str]) -> None:
+    subprocess.Popen(
+        command,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+
+def wait_and_reconcile(profile_id: str) -> int:
+    settings = load_settings()
+    try:
+        _, profile = get_profile(settings, profile_id)
+    except KeyError:
+        return 2
+    for _ in range(30):
+        if pwa_is_installed(profile):
+            reconcile_profile(settings, profile_id, profile)
+            apply_user_integration(settings)
+            return 0
+        time.sleep(1)
+    return 1
+
+
+def main() -> int:
+    args = parser().parse_args()
+    settings = load_settings()
+
+    if args.settings:
+        executable = shutil.which("outlook-pwa-settings")
+        if not executable:
+            print("outlook-pwa: settings app is not installed", file=sys.stderr)
+            return 127
+        start_detached([executable])
+        return 0
+    if args.list_profiles:
+        for profile_id, profile in settings["profiles"].items():
+            marker = "*" if profile_id == settings["default_profile"] else " "
+            print(f"{marker} {profile_id}\\t{profile['name']}")
+        return 0
+    if args.reconcile_launchers:
+        if args.wait_for_pwa:
+            profile_id = args.profile or str(settings["default_profile"])
+            return wait_and_reconcile(profile_id)
+        apply_user_integration(settings)
+        return 0
+
+    try:
+        profile_id, profile = get_profile(settings, args.profile)
+    except KeyError as error:
+        print(f"outlook-pwa: {error.args[0]}", file=sys.stderr)
+        return 2
+    if args.diagnose:
+        print(json.dumps(diagnostics(settings, profile_id, profile), indent=2))
+        return 0
+
+    edge = find_edge()
+    if not edge:
+        show_missing_edge()
+        return 127
+    try:
+        url = target_url(args, profile)
+    except ValueError as error:
+        print(f"outlook-pwa: {error}", file=sys.stderr)
+        return 2
+
+    installed = pwa_is_installed(profile)
+    if not args.dry_run:
+        user_data_dir().mkdir(mode=0o700, parents=True, exist_ok=True)
+        apply_user_integration(settings)
+    force_focus = True if args.focus else False if args.no_focus else None
+    command = edge_command(
+        edge,
+        settings,
+        profile,
+        url,
+        installed,
+        background=args.background,
+        force_focus=force_focus,
+    )
+    if args.dry_run:
+        print(shlex.join(command))
+        return 0
+    try:
+        start_detached(command)
+    except OSError as error:
+        print(f"outlook-pwa: could not start Edge: {error}", file=sys.stderr)
+        return 1
+    if not installed and not args.background:
+        start_detached(
+            [
+                sys.executable,
+                str(Path(__file__).resolve()),
+                "--profile",
+                profile_id,
+                "--reconcile-launchers",
+                "--wait-for-pwa",
+            ]
+        )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

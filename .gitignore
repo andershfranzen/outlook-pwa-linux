@@ -1,0 +1,8 @@
+# Build output may contain a live test browser profile. Never commit it.
+/build/
+/dist/
+
+__pycache__/
+*.py[cod]
+*.log
+.DS_Store

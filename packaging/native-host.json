@@ -1,0 +1,9 @@
+{
+  "name": "com.outlook_pwa_linux.link_router",
+  "description": "Open Outlook external links in the Linux default browser",
+  "path": "/usr/lib/outlook-pwa-linux/outlook-link-router",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://mfjjkdjhfcbabopnjmjapphchleaglcp/"
+  ]
+}

@@ -1,0 +1,694 @@
+#!/usr/bin/python3
+"""Native preferences for Outlook PWA Linux."""
+
+from __future__ import annotations
+
+from copy import deepcopy
+import json
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+
+import gi
+
+gi.require_version("Adw", "1")
+gi.require_version("Gdk", "4.0")
+gi.require_version("GdkWayland", "4.0")
+gi.require_version("Gtk", "4.0")
+from gi.repository import Adw, Gdk, GdkWayland, Gio, GLib, Gtk  # noqa: E402
+
+installed_library = Path("/usr/lib/outlook-pwa-linux")
+if installed_library.is_dir():
+    sys.path.insert(0, str(installed_library))
+
+from outlook_pwa_common import (  # noqa: E402
+    VERSION,
+    app_config_dir,
+    apply_user_integration,
+    default_settings,
+    edge_is_running,
+    effective_titlebar_color,
+    format_size,
+    get_profile,
+    load_settings,
+    next_profile,
+    profile_size,
+    refresh_desktop_caches,
+    remove_profile_integration,
+    save_settings,
+    user_data_dir,
+    wayland_app_id,
+)
+
+
+STYLE_KEYS = ("system", "outlook", "dark", "custom")
+STYLE_NAMES = ("System default", "Outlook blue", "Dark", "Custom color")
+VIEW_KEYS = ("mail", "calendar")
+VIEW_NAMES = ("Mail", "Calendar")
+
+
+def string_model(values: tuple[str, ...] | list[str]) -> Gtk.StringList:
+    return Gtk.StringList.new(values)
+
+
+def suffix_button(label: str, callback) -> Gtk.Button:
+    button = Gtk.Button(label=label, valign=Gtk.Align.CENTER)
+    button.add_css_class("flat")
+    button.connect("clicked", callback)
+    return button
+
+
+class SettingsWindow(Adw.ApplicationWindow):
+    def __init__(self, application: Adw.Application) -> None:
+        super().__init__(application=application)
+        self.set_title("Outlook")
+        self.set_icon_name("outlook-pwa-linux")
+        self.set_default_size(760, 780)
+        self.set_size_request(540, 600)
+        self.connect("map", self.on_map)
+
+        self.settings = load_settings()
+        self.profile_ids: list[str] = []
+        self.profile_id = str(self.settings["default_profile"])
+        self.loading = True
+
+        self.toast_overlay = Adw.ToastOverlay()
+        self.set_content(self.toast_overlay)
+        toolbar = Adw.ToolbarView()
+        self.toast_overlay.set_child(toolbar)
+
+        header = Adw.HeaderBar()
+        header.set_title_widget(Adw.WindowTitle.new("Outlook", "Settings"))
+        launch_header = Gtk.Button(
+            icon_name="media-playback-start-symbolic",
+            tooltip_text="Open the selected Outlook profile",
+        )
+        launch_header.add_css_class("suggested-action")
+        launch_header.connect("clicked", self.on_launch)
+        header.pack_end(launch_header)
+        toolbar.add_top_bar(header)
+
+        page = Adw.PreferencesPage()
+        page.set_title("Outlook")
+        page.set_icon_name("outlook-pwa-linux")
+        toolbar.set_content(page)
+
+        self.build_profiles_group(page)
+        self.build_appearance_group(page)
+        self.build_integration_group(page)
+        self.build_downloads_group(page)
+        self.build_maintenance_group(page)
+        self.build_footer(page)
+
+        self.rebuild_profile_model(self.profile_id)
+        self.load_profile(self.profile_id)
+        self.apply_header_style()
+        self.loading = False
+
+    def on_map(self, _window) -> None:
+        surface = self.get_surface()
+        if isinstance(surface, GdkWayland.WaylandToplevel):
+            _, profile = get_profile(self.settings)
+            surface.set_application_id(wayland_app_id(profile))
+
+    def apply_header_style(self) -> None:
+        if hasattr(self, "header_css"):
+            Gtk.StyleContext.remove_provider_for_display(
+                self.get_display(), self.header_css
+            )
+        color = effective_titlebar_color(self.settings)
+        if not color:
+            self.remove_css_class("outlook-colored-header")
+            return
+        self.add_css_class("outlook-colored-header")
+        self.header_css = Gtk.CssProvider()
+        self.header_css.load_from_string(
+            f"""
+            window.outlook-colored-header headerbar {{
+                background-color: {color};
+                background-image: none;
+                color: white;
+            }}
+            window.outlook-colored-header headerbar button,
+            window.outlook-colored-header headerbar windowcontrols {{
+                color: white;
+            }}
+            """
+        )
+        Gtk.StyleContext.add_provider_for_display(
+            self.get_display(),
+            self.header_css,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
+        )
+
+    def build_profiles_group(self, page: Adw.PreferencesPage) -> None:
+        group = Adw.PreferencesGroup()
+        group.set_title("Profiles")
+        group.set_description(
+            "Keep work and personal Microsoft accounts isolated and separately "
+            "pinned in the dock."
+        )
+        page.add(group)
+
+        self.profile_combo = Adw.ComboRow()
+        self.profile_combo.set_title("Selected profile")
+        self.profile_combo.connect("notify::selected", self.on_profile_selected)
+        group.add(self.profile_combo)
+
+        self.name_row = Adw.EntryRow()
+        self.name_row.set_title("Profile name")
+        self.name_row.connect("changed", self.on_name_changed)
+        group.add(self.name_row)
+
+        self.start_view_row = Adw.ComboRow()
+        self.start_view_row.set_title("Open Outlook in")
+        self.start_view_row.set_model(string_model(VIEW_NAMES))
+        self.start_view_row.connect("notify::selected", self.on_start_view_changed)
+        group.add(self.start_view_row)
+
+        self.default_row = Adw.ActionRow()
+        self.default_row.set_title("Default profile")
+        self.default_row.set_subtitle(
+            "Used by the dock shortcut, mailto links, and background startup"
+        )
+        self.default_button = suffix_button("Make Default", self.on_make_default)
+        self.default_row.add_suffix(self.default_button)
+        group.add(self.default_row)
+
+        add_row = Adw.ButtonRow()
+        add_row.set_title("Add another Outlook profile")
+        add_row.set_start_icon_name("list-add-symbolic")
+        add_row.connect("activated", self.on_add_profile)
+        group.add(add_row)
+
+    def build_appearance_group(self, page: Adw.PreferencesPage) -> None:
+        group = Adw.PreferencesGroup()
+        group.set_title("Window")
+        group.set_description(
+            "Match Edge’s title bar to Outlook, or open without browser "
+            "chrome. Reopen Outlook after changing the top-bar style."
+        )
+        page.add(group)
+
+        self.style_row = Adw.ComboRow()
+        self.style_row.set_title("Window top bar")
+        self.style_row.set_subtitle("Color the Outlook title bar")
+        self.style_row.set_model(string_model(STYLE_NAMES))
+        self.style_row.connect("notify::selected", self.on_style_changed)
+        group.add(self.style_row)
+
+        self.color_row = Adw.ActionRow()
+        self.color_row.set_title("Custom top-bar color")
+        self.color_row.set_subtitle("Used when Custom color is selected")
+        color_dialog = Gtk.ColorDialog()
+        color_dialog.set_title("Choose a top-bar color")
+        self.color_button = Gtk.ColorDialogButton(dialog=color_dialog)
+        self.color_button.set_valign(Gtk.Align.CENTER)
+        self.color_button.connect("notify::rgba", self.on_color_changed)
+        self.color_row.add_suffix(self.color_button)
+        group.add(self.color_row)
+
+        self.focus_row = Adw.SwitchRow()
+        self.focus_row.set_title("Focus mode")
+        self.focus_row.set_subtitle(
+            "Start this profile fullscreen without a top bar; press F11 to leave"
+        )
+        self.focus_row.connect("notify::active", self.on_focus_changed)
+        group.add(self.focus_row)
+
+        self.icon_row = Adw.ActionRow()
+        self.icon_row.set_title("Dock icon")
+        self.icon_row.set_subtitle("Official Outlook icon")
+        self.icon_choose_button = suffix_button("Choose…", self.on_choose_icon)
+        self.icon_reset_button = suffix_button("Reset", self.on_reset_icon)
+        self.icon_row.add_suffix(self.icon_reset_button)
+        self.icon_row.add_suffix(self.icon_choose_button)
+        group.add(self.icon_row)
+
+    def build_integration_group(self, page: Adw.PreferencesPage) -> None:
+        group = Adw.PreferencesGroup()
+        group.set_title("Desktop integration")
+        page.add(group)
+
+        self.external_row = Adw.SwitchRow()
+        self.external_row.set_title("Open external links in Firefox")
+        self.external_row.set_subtitle(
+            "Keep Outlook and Microsoft 365 links inside the app"
+        )
+        self.external_row.connect("notify::active", self.on_external_changed)
+        group.add(self.external_row)
+
+        self.mailto_row = Adw.SwitchRow()
+        self.mailto_row.set_title("Use Outlook for email links")
+        self.mailto_row.set_subtitle("Handle mailto links from Firefox and other apps")
+        self.mailto_row.connect("notify::active", self.on_mailto_changed)
+        group.add(self.mailto_row)
+
+        self.autostart_row = Adw.SwitchRow()
+        self.autostart_row.set_title("Start in the background at login")
+        self.autostart_row.set_subtitle(
+            "Keep Outlook notifications available without opening a window"
+        )
+        self.autostart_row.connect("notify::active", self.on_autostart_changed)
+        group.add(self.autostart_row)
+
+    def build_downloads_group(self, page: Adw.PreferencesPage) -> None:
+        group = Adw.PreferencesGroup()
+        group.set_title("Downloads")
+        page.add(group)
+
+        self.download_row = Adw.ActionRow()
+        self.download_row.set_title("Save files to")
+        self.download_button = suffix_button("Choose…", self.on_choose_download)
+        self.download_row.add_suffix(self.download_button)
+        group.add(self.download_row)
+
+        self.ask_download_row = Adw.SwitchRow()
+        self.ask_download_row.set_title("Ask where to save each file")
+        self.ask_download_row.set_subtitle(
+            "Applied the next time the dedicated Edge instance starts"
+        )
+        self.ask_download_row.connect(
+            "notify::active", self.on_ask_download_changed
+        )
+        group.add(self.ask_download_row)
+
+    def build_maintenance_group(self, page: Adw.PreferencesPage) -> None:
+        group = Adw.PreferencesGroup()
+        group.set_title("Maintenance")
+        page.add(group)
+
+        self.storage_row = Adw.ActionRow()
+        self.storage_row.set_title("Profile storage")
+        group.add(self.storage_row)
+
+        self.path_row = Adw.ActionRow()
+        self.path_row.set_title("Browser data")
+        group.add(self.path_row)
+
+        repair_row = Adw.ButtonRow()
+        repair_row.set_title("Repair desktop integration")
+        repair_row.set_start_icon_name("emblem-synchronizing-symbolic")
+        repair_row.connect("activated", self.on_repair)
+        group.add(repair_row)
+
+        diagnostics_row = Adw.ButtonRow()
+        diagnostics_row.set_title("Show diagnostics")
+        diagnostics_row.set_start_icon_name("dialog-information-symbolic")
+        diagnostics_row.connect("activated", self.on_diagnostics)
+        group.add(diagnostics_row)
+
+        self.remove_row = Adw.ButtonRow()
+        self.remove_row.set_title("Remove this profile")
+        self.remove_row.set_start_icon_name("user-trash-symbolic")
+        self.remove_row.add_css_class("destructive-action")
+        self.remove_row.connect("activated", self.on_remove_profile)
+        group.add(self.remove_row)
+
+        reset_row = Adw.ButtonRow()
+        reset_row.set_title("Reset this profile’s browser data")
+        reset_row.set_start_icon_name("edit-clear-all-symbolic")
+        reset_row.add_css_class("destructive-action")
+        reset_row.connect("activated", self.on_reset_profile)
+        group.add(reset_row)
+
+    def build_footer(self, page: Adw.PreferencesPage) -> None:
+        group = Adw.PreferencesGroup()
+        footer = Gtk.Label(
+            label=f"Built and ported by afive  ·  Version {VERSION}"
+        )
+        footer.add_css_class("caption")
+        footer.add_css_class("dim-label")
+        footer.set_margin_top(8)
+        footer.set_margin_bottom(16)
+        group.add(footer)
+        page.add(group)
+
+    def current_profile(self) -> dict[str, object]:
+        return self.settings["profiles"][self.profile_id]
+
+    def rebuild_profile_model(self, selected: str) -> None:
+        self.profile_ids = list(self.settings["profiles"])
+        names = [
+            str(self.settings["profiles"][profile_id]["name"])
+            for profile_id in self.profile_ids
+        ]
+        self.profile_combo.set_model(string_model(names))
+        self.profile_combo.set_selected(self.profile_ids.index(selected))
+
+    def load_profile(self, profile_id: str) -> None:
+        self.loading = True
+        self.profile_id = profile_id
+        profile = self.current_profile()
+        self.name_row.set_text(str(profile["name"]))
+        self.start_view_row.set_selected(
+            VIEW_KEYS.index(str(profile["start_view"]))
+        )
+        self.focus_row.set_active(bool(profile["focus_mode"]))
+        self.ask_download_row.set_active(bool(profile["ask_download"]))
+        self.download_row.set_subtitle(str(profile["download_directory"]))
+
+        style = str(self.settings["titlebar_style"])
+        self.style_row.set_selected(STYLE_KEYS.index(style))
+        rgba = Gdk.RGBA()
+        rgba.parse(str(self.settings["titlebar_color"]))
+        self.color_button.set_rgba(rgba)
+        self.color_row.set_visible(style == "custom")
+
+        self.external_row.set_active(bool(self.settings["route_external_links"]))
+        self.mailto_row.set_active(bool(self.settings["mailto_handler"]))
+        self.autostart_row.set_active(bool(self.settings["autostart"]))
+        is_default = profile_id == self.settings["default_profile"]
+        self.default_button.set_label("Default" if is_default else "Make Default")
+        self.default_button.set_sensitive(not is_default)
+        custom_icon = str(profile["custom_icon"])
+        self.icon_row.set_subtitle(
+            Path(custom_icon).name if custom_icon else "Official Outlook icon"
+        )
+        self.icon_reset_button.set_sensitive(bool(custom_icon))
+        self.remove_row.set_sensitive(len(self.profile_ids) > 1)
+
+        profile_path = user_data_dir() / str(profile["edge_profile"])
+        self.storage_row.set_subtitle(format_size(profile_size(profile)))
+        self.path_row.set_subtitle(str(profile_path))
+        self.loading = False
+
+    def save(self, message: str | None = None) -> None:
+        if self.loading:
+            return
+        try:
+            save_settings(self.settings)
+            apply_user_integration(self.settings)
+        except OSError as error:
+            self.toast(f"Could not save settings: {error}")
+            return
+        if message:
+            self.toast(message)
+
+    def toast(self, message: str) -> None:
+        self.toast_overlay.add_toast(Adw.Toast.new(message))
+
+    def on_profile_selected(self, row, _spec) -> None:
+        if self.loading or row.get_selected() >= len(self.profile_ids):
+            return
+        self.load_profile(self.profile_ids[row.get_selected()])
+
+    def on_name_changed(self, row) -> None:
+        if self.loading:
+            return
+        name = row.get_text().strip()
+        if not name:
+            return
+        self.current_profile()["name"] = name
+        model = self.profile_combo.get_model()
+        if isinstance(model, Gtk.StringList):
+            model.splice(self.profile_ids.index(self.profile_id), 1, [name])
+        self.save()
+
+    def on_start_view_changed(self, row, _spec) -> None:
+        if self.loading:
+            return
+        self.current_profile()["start_view"] = VIEW_KEYS[row.get_selected()]
+        self.save()
+
+    def on_make_default(self, _button) -> None:
+        self.settings["default_profile"] = self.profile_id
+        self.default_button.set_label("Default")
+        self.default_button.set_sensitive(False)
+        self.save("Default Outlook profile changed")
+
+    def on_add_profile(self, _row) -> None:
+        profile_id, edge_profile = next_profile(self.settings)
+        profile = deepcopy(default_settings()["profiles"]["default"])
+        profile["name"] = (
+            "Personal Outlook"
+            if len(self.settings["profiles"]) == 1
+            else f"Outlook {len(self.settings['profiles']) + 1}"
+        )
+        profile["edge_profile"] = edge_profile
+        self.settings["profiles"][profile_id] = profile
+        self.save("Outlook profile added")
+        self.loading = True
+        self.rebuild_profile_model(profile_id)
+        self.loading = False
+        self.load_profile(profile_id)
+
+    def on_style_changed(self, row, _spec) -> None:
+        if self.loading:
+            return
+        style = STYLE_KEYS[row.get_selected()]
+        self.settings["titlebar_style"] = style
+        self.color_row.set_visible(style == "custom")
+        self.apply_header_style()
+        self.save("Top-bar style saved — reopen Outlook to apply it")
+
+    def on_color_changed(self, button, _spec) -> None:
+        if self.loading:
+            return
+        rgba = button.get_rgba()
+        self.settings["titlebar_color"] = (
+            f"#{round(rgba.red * 255):02x}"
+            f"{round(rgba.green * 255):02x}"
+            f"{round(rgba.blue * 255):02x}"
+        )
+        if self.settings["titlebar_style"] == "custom":
+            self.apply_header_style()
+            self.save("Custom top-bar color saved — reopen Outlook to apply it")
+
+    def on_focus_changed(self, row, _spec) -> None:
+        if self.loading:
+            return
+        self.current_profile()["focus_mode"] = row.get_active()
+        self.save()
+
+    def on_external_changed(self, row, _spec) -> None:
+        if self.loading:
+            return
+        self.settings["route_external_links"] = row.get_active()
+        self.save("External link routing saved — reopen Outlook to apply it")
+
+    def on_mailto_changed(self, row, _spec) -> None:
+        if self.loading:
+            return
+        self.settings["mailto_handler"] = row.get_active()
+        self.save("Email-link preference applied")
+
+    def on_autostart_changed(self, row, _spec) -> None:
+        if self.loading:
+            return
+        self.settings["autostart"] = row.get_active()
+        self.save("Login startup preference applied")
+
+    def on_ask_download_changed(self, row, _spec) -> None:
+        if self.loading:
+            return
+        self.current_profile()["ask_download"] = row.get_active()
+        self.save()
+
+    def on_choose_download(self, _button) -> None:
+        dialog = Gtk.FileDialog()
+        dialog.set_title("Choose the Outlook download folder")
+        initial = Gio.File.new_for_path(
+            str(Path(str(self.current_profile()["download_directory"])).expanduser())
+        )
+        dialog.set_initial_folder(initial)
+        dialog.select_folder(self, None, self.on_download_selected)
+
+    def on_download_selected(self, dialog, result) -> None:
+        try:
+            folder = dialog.select_folder_finish(result)
+        except GLib.Error:
+            return
+        path = folder.get_path()
+        if not path:
+            return
+        self.current_profile()["download_directory"] = path
+        self.download_row.set_subtitle(path)
+        self.save("Download folder saved")
+
+    def on_choose_icon(self, _button) -> None:
+        dialog = Gtk.FileDialog()
+        dialog.set_title("Choose a dock icon")
+        image_filter = Gtk.FileFilter()
+        image_filter.set_name("Images")
+        image_filter.add_mime_type("image/png")
+        image_filter.add_mime_type("image/jpeg")
+        filters = Gio.ListStore.new(Gtk.FileFilter)
+        filters.append(image_filter)
+        dialog.set_filters(filters)
+        dialog.set_default_filter(image_filter)
+        dialog.open(self, None, self.on_icon_selected)
+
+    def on_icon_selected(self, dialog, result) -> None:
+        try:
+            source_file = dialog.open_finish(result)
+        except GLib.Error:
+            return
+        source = Path(source_file.get_path() or "")
+        try:
+            Gdk.Texture.new_from_filename(str(source))
+            destination = (
+                app_config_dir() / "custom-icons" / f"{self.profile_id}{source.suffix}"
+            )
+            destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
+            destination.chmod(0o600)
+        except (GLib.Error, OSError) as error:
+            self.toast(f"Could not use that image: {error}")
+            return
+        self.current_profile()["custom_icon"] = str(destination)
+        self.icon_row.set_subtitle(destination.name)
+        self.icon_reset_button.set_sensitive(True)
+        self.save("Custom dock icon applied")
+
+    def on_reset_icon(self, _button) -> None:
+        path = Path(str(self.current_profile()["custom_icon"]))
+        self.current_profile()["custom_icon"] = ""
+        try:
+            if path.is_file() and path.parent == app_config_dir() / "custom-icons":
+                path.unlink()
+        except OSError:
+            pass
+        self.icon_row.set_subtitle("Official Outlook icon")
+        self.icon_reset_button.set_sensitive(False)
+        self.save("Official Outlook icon restored")
+
+    def on_launch(self, _button) -> None:
+        executable = shutil.which("outlook-pwa") or str(
+            Path(__file__).with_name("outlook-pwa")
+        )
+        subprocess.Popen(
+            (executable, "--profile", self.profile_id),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+
+    def on_repair(self, _row) -> None:
+        changed = apply_user_integration(self.settings)
+        self.toast(
+            "Desktop integration repaired"
+            if changed
+            else "Desktop integration is already healthy"
+        )
+
+    def on_diagnostics(self, _row) -> None:
+        profile = self.current_profile()
+        data = {
+            "version": VERSION,
+            "selected_profile": self.profile_id,
+            "default_profile": self.settings["default_profile"],
+            "edge_profile": profile["edge_profile"],
+            "profile_path": str(user_data_dir() / str(profile["edge_profile"])),
+            "profile_size": format_size(profile_size(profile)),
+            "edge_running": edge_is_running(),
+            "top_bar": self.settings["titlebar_style"],
+            "focus_mode": profile["focus_mode"],
+            "external_links": self.settings["route_external_links"],
+            "autostart": self.settings["autostart"],
+        }
+        dialog = Adw.AlertDialog()
+        dialog.set_heading("Outlook diagnostics")
+        dialog.set_body(json.dumps(data, indent=2))
+        dialog.add_response("close", "Close")
+        dialog.set_default_response("close")
+        dialog.present(self)
+
+    def confirm(self, heading: str, body: str, response, callback) -> None:
+        dialog = Adw.AlertDialog()
+        dialog.set_heading(heading)
+        dialog.set_body(body)
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response(response, "Move to Trash" if response == "reset" else "Remove")
+        dialog.set_close_response("cancel")
+        dialog.set_default_response("cancel")
+        dialog.set_response_appearance(response, Adw.ResponseAppearance.DESTRUCTIVE)
+        dialog.connect("response", callback)
+        dialog.present(self)
+
+    def on_remove_profile(self, _row) -> None:
+        if len(self.settings["profiles"]) <= 1:
+            return
+        name = self.current_profile()["name"]
+        self.confirm(
+            f"Remove {name}?",
+            "Its launcher and settings will be removed. Existing browser data is "
+            "kept until you reset it.",
+            "remove",
+            self.finish_remove_profile,
+        )
+
+    def finish_remove_profile(self, _dialog, response: str) -> None:
+        if response != "remove":
+            return
+        old_profile = self.current_profile()
+        remaining = [
+            item for item in self.profile_ids if item != self.profile_id
+        ]
+        new_profile_id = remaining[0]
+        if self.settings["default_profile"] == self.profile_id:
+            self.settings["default_profile"] = new_profile_id
+        del self.settings["profiles"][self.profile_id]
+        remove_profile_integration(old_profile)
+        self.profile_id = new_profile_id
+        self.save("Outlook profile removed; browser data was kept")
+        self.loading = True
+        self.rebuild_profile_model(new_profile_id)
+        self.loading = False
+        self.load_profile(new_profile_id)
+
+    def on_reset_profile(self, _row) -> None:
+        if edge_is_running():
+            self.toast("Close every Outlook window before resetting browser data")
+            return
+        name = self.current_profile()["name"]
+        self.confirm(
+            f"Reset {name}?",
+            "This signs the profile out and moves its cookies, cache, and local "
+            "browser data to the Trash.",
+            "reset",
+            self.finish_reset_profile,
+        )
+
+    def finish_reset_profile(self, _dialog, response: str) -> None:
+        if response != "reset":
+            return
+        profile = self.current_profile()
+        path = user_data_dir() / str(profile["edge_profile"])
+        if not path.exists():
+            self.toast("This profile has no browser data to reset")
+            return
+        try:
+            Gio.File.new_for_path(str(path)).trash(None)
+        except GLib.Error as error:
+            self.toast(f"Could not move the profile to Trash: {error.message}")
+            return
+        self.storage_row.set_subtitle("0 B")
+        self.toast("Profile data moved to Trash")
+
+
+class SettingsApplication(Adw.Application):
+    def __init__(self) -> None:
+        GLib.set_application_name("Outlook")
+        Gtk.Window.set_default_icon_name("outlook-pwa-linux")
+        super().__init__(
+            application_id="com.outlook_pwa_linux.settings",
+            flags=Gio.ApplicationFlags.DEFAULT_FLAGS,
+        )
+        self.window: SettingsWindow | None = None
+
+    def do_activate(self) -> None:
+        if self.window is None:
+            self.window = SettingsWindow(self)
+        self.window.present()
+
+
+def main() -> int:
+    application = SettingsApplication()
+    return application.run(sys.argv)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

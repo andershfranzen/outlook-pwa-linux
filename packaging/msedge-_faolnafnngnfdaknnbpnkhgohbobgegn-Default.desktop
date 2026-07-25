@@ -1,0 +1,36 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Outlook
+GenericName=Email and Calendar
+Comment=Outlook on the web in a dedicated Edge application
+Exec=/usr/bin/outlook-pwa --profile default %U
+Icon=outlook-pwa-linux
+Terminal=false
+Categories=Office;Email;
+Keywords=Outlook;Microsoft 365;Office 365;Mail;Email;Calendar;
+MimeType=x-scheme-handler/mailto;
+StartupNotify=true
+StartupWMClass=msedge-_faolnafnngnfdaknnbpnkhgohbobgegn-Default
+NoDisplay=false
+Actions=NewMessage;Calendar;NewEvent;Settings;
+
+[Desktop Action NewMessage]
+Name=New Message
+Exec=/usr/bin/outlook-pwa --profile default --compose
+Icon=mail-message-new
+
+[Desktop Action Calendar]
+Name=Calendar
+Exec=/usr/bin/outlook-pwa --profile default --calendar
+Icon=x-office-calendar
+
+[Desktop Action NewEvent]
+Name=New Event
+Exec=/usr/bin/outlook-pwa --profile default --new-event
+Icon=x-office-calendar
+
+[Desktop Action Settings]
+Name=Settings
+Exec=/usr/bin/outlook-pwa-settings
+Icon=preferences-system
